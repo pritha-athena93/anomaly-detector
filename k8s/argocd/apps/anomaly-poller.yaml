@@ -10,7 +10,7 @@ spec:
   source:
     repoURL: https://github.com/pritha-athena93/anomaly-detector.git
     targetRevision: main
-    path: k8s/manifests/anomaly-poller
+    path: k8s/apps/anomaly-poller
   destination:
     server: https://kubernetes.default.svc
     namespace: anomaly-poller

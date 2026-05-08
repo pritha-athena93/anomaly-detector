@@ -14,7 +14,7 @@ spec:
   source:
     repoURL: https://github.com/pritha-athena93/anomaly-detector.git
     targetRevision: main
-    path: k8s/charts/namespaces
+    path: k8s/helm/namespaces
     helm:
       valueFiles:
         - values.yaml

@@ -44,7 +44,7 @@ spec:
   source:
     repoURL: https://github.com/pritha-athena93/anomaly-detector.git
     targetRevision: main
-    path: k8s/manifests/cert-manager
+    path: k8s/helm/cert-manager
   destination:
     server: https://kubernetes.default.svc
     namespace: cert-manager

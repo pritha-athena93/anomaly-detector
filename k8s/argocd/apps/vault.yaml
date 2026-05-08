@@ -31,7 +31,7 @@ spec:
     # cert-manager Certificate manifest
     - repoURL: https://github.com/pritha-athena93/anomaly-detector.git
       targetRevision: main
-      path: k8s/manifests/vault
+      path: k8s/helm/vault
   destination:
     server: https://kubernetes.default.svc
     namespace: vault

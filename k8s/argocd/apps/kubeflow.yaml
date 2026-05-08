@@ -3,13 +3,15 @@ kind: Application
 metadata:
   name: kubeflow
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
   source:
     repoURL: https://github.com/kubeflow/manifests
-    targetRevision: v1.9.0
+    targetRevision: v1.9.1
     path: example
   destination:
     server: https://kubernetes.default.svc

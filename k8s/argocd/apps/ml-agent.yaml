@@ -10,7 +10,7 @@ spec:
   source:
     repoURL: https://github.com/pritha-athena93/anomaly-detector.git
     targetRevision: main
-    path: k8s/manifests/ml-agent
+    path: k8s/apps/ml-agent
   destination:
     server: https://kubernetes.default.svc
     namespace: ml-agent

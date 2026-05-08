@@ -42,7 +42,7 @@ spec:
   source:
     repoURL: https://github.com/pritha-athena93/anomaly-detector.git
     targetRevision: main
-    path: k8s/manifests/kserve
+    path: k8s/apps/kserve
   destination:
     server: https://kubernetes.default.svc
     namespace: kserve
