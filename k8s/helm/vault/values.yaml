@@ -58,16 +58,8 @@ server:
         service_registration "kubernetes" {}
 
   # ── TLS cert from cert-manager ────────────────────────
-  extraInitContainers:
-    - name: wait-for-tls
-      image: bitnami/kubectl:latest
-      command:
-        - /bin/sh
-        - -c
-        - |
-          until kubectl get secret vault-tls -n vault 2>/dev/null; do
-            echo "Waiting for vault-tls secret..."; sleep 5
-          done
+  # No init container needed: cert-manager (sync-wave 1) always runs before
+  # vault (sync-wave 3), so vault-tls secret exists at pod start time.
 
   volumes:
     - name: vault-tls

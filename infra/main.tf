@@ -21,11 +21,11 @@ terraform {
   # To migrate from local state:
   #   terraform init -migrate-state
   backend "s3" {
-    bucket         = "anomaly-detector-tf-state-984445750473"   # substitute account ID
-    key            = "anomaly-detector/terraform.tfstate"
-    region         = "us-east-1"
-    dynamodb_table = "anomaly-tf-locks"
-    encrypt        = true
+    bucket = "anomaly-detector-tf-state-984445750473"   # substitute account ID
+    key    = "anomaly-detector/terraform.tfstate"
+    region = "us-east-1"
+    encrypt = true
+    use_lockfile = true   # native S3 locking (Terraform >= 1.10, no DynamoDB needed)
   }
 }
 
@@ -274,35 +274,6 @@ resource "aws_sqs_queue" "cloudtrail_events" {
   tags = { Name = "${var.cluster_name}-cloudtrail-events" }
 }
 
-# Allow S3 to publish to this queue
-resource "aws_sqs_queue_policy" "cloudtrail_events" {
-  queue_url = aws_sqs_queue.cloudtrail_events.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "s3.amazonaws.com" }
-      Action    = "sqs:SendMessage"
-      Resource  = aws_sqs_queue.cloudtrail_events.arn
-      Condition = {
-        ArnLike = { "aws:SourceArn" = aws_s3_bucket.cloudtrail_logs.arn }
-      }
-    }]
-  })
-}
-
-# S3 event notification → SQS on every new CloudTrail log file
-resource "aws_s3_bucket_notification" "cloudtrail_logs" {
-  bucket = aws_s3_bucket.cloudtrail_logs.id
-
-  queue {
-    queue_arn = aws_sqs_queue.cloudtrail_events.arn
-    events    = ["s3:ObjectCreated:*"]
-  }
-
-  depends_on = [aws_sqs_queue_policy.cloudtrail_events]
-}
-
 # ── RDS: Postgres 16 + pgvector ───────────────────────────
 # Private subnet only; accessible from EKS nodes (same VPC) only.
 # pgvector: IVFFlat index on embedding column (shared_preload_libraries).
@@ -496,7 +467,96 @@ resource "aws_eks_cluster" "primary" {
     endpoint_public_access  = false  # private cluster — access via bastion only
   }
 
+  # API_AND_CONFIG_MAP: allows both aws-auth ConfigMap and EKS access entry API.
+  # Required for aws_eks_access_entry below (bastion cluster-admin grant).
+  access_config {
+    authentication_mode = "API_AND_CONFIG_MAP"
+  }
+
+  # access_config can only be set once on cluster creation — updates to
+  # authentication_mode are done in-place by the AWS API, but Terraform
+  # < 5.x may show a force-replace diff if the attribute wasn't in the
+  # original state. Ignore it to prevent unintended cluster recreation.
+  lifecycle {
+    ignore_changes = [access_config]
+  }
+
   depends_on = [aws_iam_role_policy_attachment.eks_cluster]
+}
+
+# Grant bastion role cluster-admin so bootstrap-aws.sh can run kubectl/helm.
+# Using EKS access entry API (no manual aws-auth ConfigMap editing needed).
+resource "aws_eks_access_entry" "bastion" {
+  cluster_name  = aws_eks_cluster.primary.name
+  principal_arn = aws_iam_role.bastion.arn
+  type          = "STANDARD"
+
+  depends_on = [aws_eks_cluster.primary]
+}
+
+resource "aws_eks_access_policy_association" "bastion_admin" {
+  cluster_name  = aws_eks_cluster.primary.name
+  principal_arn = aws_iam_role.bastion.arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
+
+  depends_on = [aws_eks_access_entry.bastion]
+}
+
+# Allow bastion SG to reach EKS private API endpoint on 443.
+# Without this rule the bastion kubectl calls time out.
+resource "aws_security_group_rule" "eks_from_bastion" {
+  type                     = "ingress"
+  from_port                = 443
+  to_port                  = 443
+  protocol                 = "tcp"
+  security_group_id        = aws_eks_cluster.primary.vpc_config[0].cluster_security_group_id
+  source_security_group_id = aws_security_group.bastion.id
+  description              = "Bastion to EKS API"
+}
+
+# ── EKS Addons ───────────────────────────────────────────
+# EBS CSI driver: required for gp3 PersistentVolumes (Vault, Prometheus).
+# IRSA: dedicated role for ebs-csi-controller-sa (NOT the node role).
+
+resource "aws_iam_role" "ebs_csi" {
+  name = "${var.cluster_name}-ebs-csi"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Principal = { Federated = aws_iam_openid_connect_provider.eks.arn }
+      Condition = {
+        StringEquals = {
+          "${local.oidc_issuer}:sub" = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+          "${local.oidc_issuer}:aud" = "sts.amazonaws.com"
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ebs_csi" {
+  role       = aws_iam_role.ebs_csi.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
+resource "aws_eks_addon" "ebs_csi" {
+  cluster_name             = aws_eks_cluster.primary.name
+  addon_name               = "aws-ebs-csi-driver"
+  service_account_role_arn = aws_iam_role.ebs_csi.arn
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+
+  depends_on = [
+    aws_eks_node_group.ml,
+    aws_iam_role_policy_attachment.ebs_csi,
+  ]
 }
 
 # ── OIDC Provider (IRSA) ──────────────────────────────────
@@ -818,14 +878,7 @@ resource "aws_sqs_queue_policy" "cloudtrail_events_policy" {
 # Two roles: one for Terraform apply, one for ECR push.
 # Trust: GitHub's OIDC provider (token.actions.githubusercontent.com).
 
-data "aws_iam_openid_connect_provider" "github" {
-  url = "https://token.actions.githubusercontent.com"
-}
-
-# Create OIDC provider if it doesn't already exist in the account.
-# (If you already have it, import it instead of creating.)
 resource "aws_iam_openid_connect_provider" "github" {
-  count           = 0   # set to 1 on first apply if provider doesn't exist
   url             = "https://token.actions.githubusercontent.com"
   client_id_list  = ["sts.amazonaws.com"]
   thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
@@ -833,11 +886,8 @@ resource "aws_iam_openid_connect_provider" "github" {
 
 locals {
   # Replace pritha-athena93/anomaly-detector with your actual GitHub org/repo
-  github_repo = "pritha-athena93/anomaly-detector"
-  github_oidc_arn = try(
-    data.aws_iam_openid_connect_provider.github.arn,
-    "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"
-  )
+  github_repo     = "pritha-athena93/anomaly-detector"
+  github_oidc_arn = aws_iam_openid_connect_provider.github.arn
 }
 
 resource "aws_iam_role" "github_terraform" {

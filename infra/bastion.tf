@@ -74,11 +74,27 @@ resource "aws_iam_role_policy" "bastion_eks" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["eks:DescribeCluster", "eks:ListClusters"]
-      Resource = "*"
-    }]
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["eks:DescribeCluster", "eks:ListClusters"]
+        Resource = "*"
+      },
+      {
+        # Required for: aws eks update-kubeconfig to generate a token
+        Effect   = "Allow"
+        Action   = ["eks:DescribeCluster"]
+        Resource = "*"
+      },
+      {
+        # setup-rds-schema.sh fetches the DSN from Secrets Manager
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = [
+          "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:anomaly/*"
+        ]
+      }
+    ]
   })
 }
 

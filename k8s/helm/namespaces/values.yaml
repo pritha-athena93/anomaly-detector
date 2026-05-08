@@ -1,3 +1,8 @@
+storageClasses:
+  gp3:
+    enabled: true
+    default: "true"   # replaces gp2 as the default StorageClass
+
 namespaces:
   - name: argocd
   - name: cert-manager

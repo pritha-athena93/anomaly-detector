@@ -21,7 +21,7 @@ Install these on your local machine before starting:
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| Terraform | >= 1.6 | AWS infra provisioning |
+| Terraform | >= 1.10 | AWS infra provisioning (native S3 locking) |
 | AWS CLI | >= 2.x | Auth + Secrets Manager |
 | kubectl | >= 1.28 | K8s cluster access (via bastion) |
 | helm | >= 3.14 | ArgoCD bootstrap |
@@ -62,6 +62,47 @@ aws ec2 create-key-pair \
   --output text > ~/.ssh/bastion-key.pem
 
 chmod 400 ~/.ssh/bastion-key.pem
+```
+
+---
+
+## Step 2.5 — Create Terraform State Backend
+
+Run **once** before the first `terraform init`. Creates the S3 bucket and DynamoDB lock table that `infra/main.tf` uses as its remote backend.
+
+```bash
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+REGION=us-east-1
+
+aws s3api create-bucket \
+  --bucket "anomaly-detector-tf-state-${ACCOUNT_ID}" \
+  --region $REGION
+
+aws s3api put-bucket-versioning \
+  --bucket "anomaly-detector-tf-state-${ACCOUNT_ID}" \
+  --versioning-configuration Status=Enabled
+
+aws s3api put-bucket-encryption \
+  --bucket "anomaly-detector-tf-state-${ACCOUNT_ID}" \
+  --server-side-encryption-configuration \
+    '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+
+aws s3api put-public-access-block \
+  --bucket "anomaly-detector-tf-state-${ACCOUNT_ID}" \
+  --public-access-block-configuration \
+    "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
+```
+
+Then initialize Terraform with the S3 backend:
+
+```bash
+cd infra/
+
+# If backend_override.tf exists (local state fallback), remove it first
+rm -f backend_override.tf
+
+terraform init -var-file=config/terraform.tfvars
+# If migrating existing local state: terraform init -migrate-state -var-file=config/terraform.tfvars
 ```
 
 ---
