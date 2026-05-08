@@ -354,44 +354,46 @@ vault kv put secret/anomaly/kafka \
 
 ## Step 9 — Build and Push Container Images
 
+ECR repos: `anomaly-detector/agent`, `anomaly-detector/poller`, `anomaly-detector/training-pipeline`
+
 ```bash
-ECR_REGISTRY=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com
+ECR_REGISTRY=984445750473.dkr.ecr.us-east-1.amazonaws.com
 aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR_REGISTRY
 
 # Create ECR repos (first time only)
-for repo in anomaly-agent anomaly-trainer anomaly-poller; do
+for repo in anomaly-detector/agent anomaly-detector/poller anomaly-detector/training-pipeline; do
   aws ecr create-repository --repository-name $repo --region us-east-1
 done
 
 # Build + push agent
-docker build -t $ECR_REGISTRY/anomaly-agent:latest -f agent/Dockerfile .
-docker push $ECR_REGISTRY/anomaly-agent:latest
-
-# Build + push trainer
-docker build -t $ECR_REGISTRY/anomaly-trainer:latest -f ml/Dockerfile .
-docker push $ECR_REGISTRY/anomaly-trainer:latest
+docker build -t $ECR_REGISTRY/anomaly-detector/agent:latest -f agent/Dockerfile .
+docker push $ECR_REGISTRY/anomaly-detector/agent:latest
 
 # Build + push poller
-docker build -t $ECR_REGISTRY/anomaly-poller:latest -f poller/Dockerfile .
-docker push $ECR_REGISTRY/anomaly-poller:latest
+docker build -t $ECR_REGISTRY/anomaly-detector/poller:latest -f poller/Dockerfile .
+docker push $ECR_REGISTRY/anomaly-detector/poller:latest
+
+# Build + push training-pipeline
+docker build -t $ECR_REGISTRY/anomaly-detector/training-pipeline:latest -f ml/Dockerfile .
+docker push $ECR_REGISTRY/anomaly-detector/training-pipeline:latest
 ```
 
-Update image references in manifests:
-- `k8s/manifests/ml-agent/deployment.yaml` — set `image:` to `$ECR_REGISTRY/anomaly-agent:latest`
-- `k8s/manifests/kserve/inference-service.yaml` — set `storageUri` to S3 model path
-- `k8s/manifests/anomaly-poller/cronjob.yaml` — set `image:` to `$ECR_REGISTRY/anomaly-poller:latest`
-
-Commit + push → ArgoCD auto-syncs.
+Image refs in manifests are already set to the above URLs. ArgoCD auto-syncs on push.
 
 ---
 
 ## Step 10 — Deploy Kubeflow Pipelines
 
-```bash
-# From bastion
-kubectl apply -k k8s/kustomize/kubeflow/
+Kubeflow deploys via ArgoCD (`k8s/argocd/apps/kubeflow.yaml`, source: `kubeflow/manifests` v1.9.1).
+No manual `kubectl apply` needed — ArgoCD syncs it automatically once root app is applied.
 
-# Wait for Kubeflow to be ready (~10 min)
+Monitor from bastion:
+
+```bash
+# Watch kubeflow app sync
+kubectl get application kubeflow -n argocd -w
+
+# Wait for all deployments ready (~10 min)
 kubectl wait --for=condition=Available deployment --all -n kubeflow --timeout=600s
 ```
 
@@ -448,27 +450,27 @@ Pipeline steps (in order, each step blocks the next):
 
 ## Step 12 — Deploy KServe InferenceService
 
-After training pipeline completes and model is in S3:
+KServe operator + InferenceService deploy via ArgoCD (`k8s/argocd/apps/kserve.yaml`, sync-wave 3/4).
+`k8s/apps/kserve/inference-service.yaml` is auto-synced — no manual apply.
+
+Monitor:
 
 ```bash
-kubectl apply -f k8s/manifests/kserve/inference-service.yaml
 kubectl get inferenceservice -n kserve
 # Wait for READY=True
+kubectl get application kserve -n argocd
 ```
 
 ---
 
 ## Step 13 — Deploy Agent and Poller
 
+Agent and poller deploy via ArgoCD (`k8s/argocd/apps/ml-agent.yaml`, `k8s/argocd/apps/anomaly-poller.yaml`, sync-wave 4).
+Manifests: `k8s/apps/ml-agent/`, `k8s/apps/anomaly-poller/` — auto-synced, no manual apply.
+
+Verify:
+
 ```bash
-# Agent (Kafka consumer + LangGraph)
-kubectl apply -f k8s/manifests/ml-agent/rbac.yaml
-kubectl apply -f k8s/manifests/ml-agent/deployment.yaml
-
-# Poller (SQS → KServe CronJob)
-kubectl apply -f k8s/manifests/anomaly-poller/cronjob.yaml
-
-# Verify
 kubectl get pods -n ml-agent
 kubectl get cronjob -n anomaly-poller
 ```

@@ -12,7 +12,7 @@ metadata:
 spec:
   project: default
   sources:
-    - repoURL: https://kserve.github.io/helm-charts
+    - repoURL: ghcr.io/kserve/charts
       chart: kserve
       targetRevision: v0.13.0
       helm:

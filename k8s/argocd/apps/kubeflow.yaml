@@ -11,7 +11,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/kubeflow/manifests
-    targetRevision: v1.9.1
+    targetRevision: v1.11.0
     path: example
   destination:
     server: https://kubernetes.default.svc

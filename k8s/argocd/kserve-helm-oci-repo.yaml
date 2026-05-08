@@ -1,0 +1,16 @@
+# ArgoCD Repository registration for KServe OCI Helm chart (public registry — no credentials).
+# ArgoCD requires explicit registration for OCI registries (enableOCI: "true").
+# Replaces the defunct https://kserve.github.io/helm-charts repo.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kserve-helm-oci
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: repository
+type: Opaque
+stringData:
+  type: helm
+  name: kserve-oci
+  url: ghcr.io/kserve/charts
+  enableOCI: "true"

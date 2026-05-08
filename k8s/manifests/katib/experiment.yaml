@@ -1,0 +1,81 @@
+# Katib HPO experiment for IsolationForest anomaly detector.
+# Submitted by the ml-agent tool when the agent decides to trigger re-tuning.
+#
+# trainer.py reads hyperparams from env vars (N_ESTIMATORS, CONTAMINATION, MAX_SAMPLES).
+# Metric line: f1=<value>  (stdout, parsed by Katib StdOut collector)
+#
+# Objective: maximize f1 (matches trainer.py print output).
+apiVersion: kubeflow.org/v1beta1
+kind: Experiment
+metadata:
+  name: isolation-forest-hpo
+  namespace: kubeflow
+spec:
+  objective:
+    type: maximize
+    goal: 0.85
+    objectiveMetricName: f1
+  algorithm:
+    algorithmName: bayesianoptimization
+  parallelTrialCount: 3
+  maxTrialCount: 20
+  maxFailedTrialCount: 5
+  parameters:
+    - name: n_estimators
+      parameterType: int
+      feasibleSpace:
+        min: "50"
+        max: "400"
+    - name: contamination
+      parameterType: double
+      feasibleSpace:
+        min: "0.01"
+        max: "0.20"
+    - name: max_samples
+      parameterType: double
+      feasibleSpace:
+        min: "0.5"
+        max: "1.0"
+  metricsCollectorSpec:
+    collector:
+      kind: StdOut
+  trialTemplate:
+    primaryContainerName: trainer
+    trialParameters:
+      - name: n_estimators
+        description: Number of trees in the IsolationForest
+        reference: n_estimators
+      - name: contamination
+        description: Expected fraction of anomalies
+        reference: contamination
+      - name: max_samples
+        description: Fraction of samples per tree
+        reference: max_samples
+    trialSpec:
+      apiVersion: batch/v1
+      kind: Job
+      spec:
+        template:
+          spec:
+            serviceAccountName: training-sa
+            containers:
+              - name: trainer
+                image: 984445750473.dkr.ecr.us-east-1.amazonaws.com/anomaly-detector/training-pipeline:latest
+                command: ["python", "ml/trainer.py"]
+                env:
+                  - name: N_ESTIMATORS
+                    value: "$(trialParameters.n_estimators)"
+                  - name: CONTAMINATION
+                    value: "$(trialParameters.contamination)"
+                  - name: MAX_SAMPLES
+                    value: "$(trialParameters.max_samples)"
+                  - name: AWS_REGION
+                    value: us-east-1
+                resources:
+                  requests:
+                    cpu: 500m
+                    memory: 1Gi
+                  limits:
+                    cpu: 2000m
+                    memory: 2Gi
+            restartPolicy: Never
