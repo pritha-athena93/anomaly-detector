@@ -5,7 +5,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir \
     langchain==0.2.12 \
     langchain-aws==0.1.16 \
-    langchain-core==0.2.28 \
+    langchain-core==0.2.29 \
     langgraph==0.1.19 \
     fastapi==0.111.1 \
     uvicorn==0.30.3 \
