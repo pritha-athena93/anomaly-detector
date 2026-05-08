@@ -1,0 +1,70 @@
+# One-shot Job to create Kafka topics after Redpanda cluster is Ready.
+# Uses rpk (bundled in the Redpanda image) to create topics via TLS.
+# CA cert comes from the secret created by Redpanda's cert-manager integration:
+#   anomaly-redpanda-default-root-certificate (key: ca.crt)
+#
+# Topics:
+#   events-raw        — 12 partitions, replication 3, retention 1d (high volume)
+#   anomalies-flagged — 6 partitions,  replication 3, retention 7d
+#
+# Run once on first deploy. selfHeal=false on the ArgoCD app prevents re-running.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: create-kafka-topics
+  namespace: kafka
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        # Wait until at least one broker is reachable before running rpk
+        - name: wait-for-broker
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              until nc -z anomaly-redpanda-0.anomaly-redpanda-internal.kafka.svc 9093; do
+                echo "waiting for broker..."; sleep 5;
+              done
+      containers:
+        - name: rpk
+          image: docker.redpanda.com/redpandadata/redpanda:v25.3.14
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              BROKERS="anomaly-redpanda-0.anomaly-redpanda-internal.kafka.svc:9093"
+              CA=/etc/redpanda/ca.crt
+
+              rpk topic create events-raw \
+                --partitions 12 --replicas 3 \
+                --topic-config retention.ms=86400000 \
+                --brokers "$BROKERS" \
+                --tls-enabled --tls-truststore "$CA" 2>&1 || true
+
+              rpk topic create anomalies-flagged \
+                --partitions 6 --replicas 3 \
+                --topic-config retention.ms=604800000 \
+                --brokers "$BROKERS" \
+                --tls-enabled --tls-truststore "$CA" 2>&1 || true
+
+              echo "Topics created:"
+              rpk topic list \
+                --brokers "$BROKERS" \
+                --tls-enabled --tls-truststore "$CA" 2>&1
+          volumeMounts:
+            - name: ca
+              mountPath: /etc/redpanda
+              readOnly: true
+      volumes:
+        - name: ca
+          secret:
+            secretName: anomaly-redpanda-default-root-certificate
+            items:
+              - key: ca.crt
+                path: ca.crt

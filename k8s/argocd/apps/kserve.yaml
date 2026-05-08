@@ -20,6 +20,9 @@ spec:
         parameters:
           - name: kserve.controller.image.tag
             value: v0.13.0
+          # gcr.io/kubebuilder/kube-rbac-proxy:v0.13.1 deleted from GCR; use quay.io
+          - name: kserve.controller.rbacProxyImage
+            value: quay.io/brancz/kube-rbac-proxy:v0.13.1
   destination:
     server: https://kubernetes.default.svc
     namespace: kserve

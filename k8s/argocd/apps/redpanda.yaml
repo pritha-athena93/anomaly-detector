@@ -1,41 +1,9 @@
-# Redpanda operator + cluster + topics.
-# Operator must be Ready before cluster.yaml is applied (sync-wave ordering).
-# cert-manager must be Ready before operator (Redpanda uses it for broker TLS certs).
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: redpanda-operator
-  namespace: argocd
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io
-  annotations:
-    argocd.argoproj.io/sync-wave: "0"
-spec:
-  project: default
-  source:
-    repoURL: https://charts.redpanda.com
-    chart: redpanda-operator
-    targetRevision: 2.1.20
-    helm:
-      values: |
-        additionalCmdFlags:
-          - "--additional-controllers=topic"
-        resources:
-          requests:
-            cpu: 100m
-            memory: 128Mi
-          limits:
-            cpu: 500m
-            memory: 256Mi
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: kafka
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-    syncOptions:
-      - CreateNamespace=false
+# Redpanda cluster deployed via the redpanda Helm chart directly (no operator CRD approach).
+# Reason: redpanda-operator 2.1.20 never existed in charts.redpanda.com; 25.x changed APIs.
+# The direct Helm chart approach is Redpanda's recommended path for 25.x+.
+#
+# Topics are created by a post-cluster Job in k8s/apps/kafka/ (wave 2).
+# cert-manager must be Running before wave 1 (redpanda uses it for broker TLS certs).
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -45,13 +13,68 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
   annotations:
-    argocd.argoproj.io/sync-wave: "1"   # after operator
+    argocd.argoproj.io/sync-wave: "1"   # after cert-manager (wave 0)
 spec:
   project: default
   source:
-    repoURL: https://github.com/pritha-athena93/anomaly-detector.git
-    targetRevision: main
-    path: k8s/helm/kafka
+    repoURL: https://charts.redpanda.com
+    chart: redpanda
+    targetRevision: 25.3.5
+    helm:
+      releaseName: anomaly-redpanda
+      values: |
+        statefulset:
+          replicas: 3
+
+        tls:
+          enabled: true
+          certs:
+            default:
+              caEnabled: true
+
+        auth:
+          sasl:
+            enabled: false
+
+        listeners:
+          kafka:
+            port: 9093
+            tls:
+              enabled: true
+              cert: default
+              requireClientAuth: false
+          rpc:
+            port: 33145
+            tls:
+              enabled: true
+              cert: default
+          admin:
+            port: 9644
+            tls:
+              enabled: true
+              cert: default
+
+        storage:
+          persistentVolume:
+            enabled: true
+            size: 50Gi
+            storageClass: gp3
+
+        resources:
+          cpu:
+            cores: 2
+          memory:
+            container:
+              max: 4Gi
+            redpanda:
+              memory: 3Gi
+              reserveMemory: 1Gi
+
+        config:
+          cluster:
+            default_topic_replications: 3
+            min_insync_replicas: 2
+            log_retention_ms: 604800000
   destination:
     server: https://kubernetes.default.svc
     namespace: kafka
@@ -62,3 +85,28 @@ spec:
     syncOptions:
       - CreateNamespace=false
       - ServerSideApply=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: redpanda-topics
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"   # after cluster is ready
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/pritha-athena93/anomaly-detector.git
+    targetRevision: main
+    path: k8s/apps/kafka
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kafka
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: false   # Jobs must not be auto-deleted/re-run on selfHeal
+    syncOptions:
+      - CreateNamespace=false
