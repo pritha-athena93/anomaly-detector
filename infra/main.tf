@@ -973,3 +973,71 @@ resource "aws_iam_role_policy" "github_ecr" {
     ]
   })
 }
+
+# ── Vault Auto-Unseal (AWS KMS) ───────────────────────────
+# Vault uses this KMS key to encrypt/decrypt its master key on startup.
+# Eliminates manual unseal — pods can restart freely without human intervention.
+
+resource "aws_kms_key" "vault" {
+  description             = "${var.cluster_name} Vault auto-unseal"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+
+  tags = {
+    Name    = "${var.cluster_name}-vault-unseal"
+    Cluster = var.cluster_name
+  }
+}
+
+resource "aws_kms_alias" "vault" {
+  name          = "alias/${var.cluster_name}-vault-unseal"
+  target_key_id = aws_kms_key.vault.key_id
+}
+
+# IRSA role for vault SA — allows KMS auto-unseal only
+resource "aws_iam_role" "vault_sa" {
+  name = "${var.cluster_name}-vault-sa"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Principal = { Federated = aws_iam_openid_connect_provider.eks.arn }
+      Condition = {
+        StringEquals = {
+          "${local.oidc_issuer}:sub" = "system:serviceaccount:vault:vault"
+          "${local.oidc_issuer}:aud" = "sts.amazonaws.com"
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "vault_kms" {
+  name = "vault-kms-unseal"
+  role = aws_iam_role.vault_sa.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:DescribeKey",
+      ]
+      Resource = aws_kms_key.vault.arn
+    }]
+  })
+}
+
+output "vault_kms_key_arn" {
+  value       = aws_kms_key.vault.arn
+  description = "KMS key ARN for Vault auto-unseal (put in vault Helm values)"
+}
+
+output "vault_irsa_role_arn" {
+  value       = aws_iam_role.vault_sa.arn
+  description = "IRSA role ARN for vault SA (annotate vault ServiceAccount)"
+}
