@@ -1,10 +1,12 @@
-# Syncs k8s/namespaces.yaml — must be the first app ArgoCD reconciles.
+# Deploys namespaces Helm chart — must be the first app ArgoCD reconciles.
 # All other apps set CreateNamespace=false and depend on this being Ready.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: namespaces
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
@@ -12,8 +14,10 @@ spec:
   source:
     repoURL: https://github.com/pritha-athena93/anomaly-detector.git
     targetRevision: main
-    path: k8s
-    include: namespaces.yaml
+    path: k8s/charts/namespaces
+    helm:
+      valueFiles:
+        - values.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
@@ -23,3 +27,4 @@ spec:
       selfHeal: true
     syncOptions:
       - ServerSideApply=true
+      - CreateNamespace=true

@@ -7,8 +7,12 @@ infra/.terraform/
 infra/state/
 infra/*.tfstate
 infra/*.tfstate.backup
+infra/*.tfstate.*.backup
 infra/config/terraform.tfvars
 !infra/config/terraform.tfvars.example
+
+# outputs (may contain sensitive values)
+infra-outputs.json
 
 # python
 __pycache__/
