@@ -1,0 +1,5 @@
+apiVersion: v2
+name: vault-extras
+description: cert-manager Certificate and supporting resources for Vault HA TLS
+type: application
+version: 0.1.0

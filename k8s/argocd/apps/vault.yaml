@@ -1,7 +1,6 @@
-# Vault — standalone mode with TLS listener.
-# TLS cert issued by cert-manager (k8s/manifests/vault/certificate.yaml).
-# Reflector copies the vault-tls secret to consumer namespaces that need
-# to verify the Vault API TLS certificate.
+# Vault HA with Raft + TLS.
+# TLS cert issued by cert-manager via vault-extras Helm chart.
+# Reflector copies vault-tls to consumer namespaces (values in vault-extras/values.yaml).
 #
 # NOTE: Vault starts sealed. After first deploy:
 #   kubectl exec -n vault vault-0 -- vault operator init
@@ -24,14 +23,17 @@ spec:
       helm:
         valueFiles:
           - $values/k8s/helm/vault/values.yaml
-    # Values file from this repo
+    # Values file reference for the HashiCorp chart above
     - repoURL: https://github.com/pritha-athena93/anomaly-detector.git
       targetRevision: main
       ref: values
-    # cert-manager Certificate manifest
+    # vault-extras Helm chart: cert-manager Certificate (with Raft SANs + reflector)
     - repoURL: https://github.com/pritha-athena93/anomaly-detector.git
       targetRevision: main
-      path: k8s/helm/vault
+      path: k8s/helm/vault-extras
+      helm:
+        valueFiles:
+          - values.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: vault
