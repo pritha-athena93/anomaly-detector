@@ -1,0 +1,28 @@
+# App of Apps — single kubectl apply from bastion after ArgoCD is bootstrapped.
+# ArgoCD syncs this first; it discovers and creates all child Applications in apps/.
+#
+# Apply: kubectl apply -f k8s/argocd/root-app.yaml -n argocd
+#
+# REQUIRED: set repoURL to your actual Git remote before applying.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/pritha-athena93/anomaly-detector.git  # ← substitute
+    targetRevision: main
+    path: k8s/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false   # namespaces managed by the namespaces app below

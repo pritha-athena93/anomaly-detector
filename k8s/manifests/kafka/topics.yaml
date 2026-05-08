@@ -1,0 +1,46 @@
+# Requires:
+#   - anomaly-redpanda cluster Ready (cluster.yaml)
+#   - redpanda-operator running with --additional-controllers=topic flag (infra/helm.tf)
+#
+# CA cert secret created automatically by Redpanda chart:
+#   anomaly-redpanda-default-root-certificate  (key: ca.crt)
+#
+# The Topic controller connects to the broker via the TLS Kafka API (port 9093)
+# using the cluster's own CA cert to verify the broker certificate.
+---
+apiVersion: cluster.redpanda.com/v1alpha1
+kind: Topic
+metadata:
+  name: anomalies-flagged
+  namespace: kafka
+spec:
+  kafkaApiSpec:
+    brokers:
+      - "anomaly-redpanda-0.anomaly-redpanda.kafka.svc:9093"
+    tls:
+      caCertSecretRef:
+        name: anomaly-redpanda-default-root-certificate
+        key: ca.crt
+  partitions: 6
+  replicationFactor: 3
+  additionalConfig:
+    retention.ms: "604800000"    # 7 days
+    min.insync.replicas: "2"
+---
+apiVersion: cluster.redpanda.com/v1alpha1
+kind: Topic
+metadata:
+  name: events-raw
+  namespace: kafka
+spec:
+  kafkaApiSpec:
+    brokers:
+      - "anomaly-redpanda-0.anomaly-redpanda.kafka.svc:9093"
+    tls:
+      caCertSecretRef:
+        name: anomaly-redpanda-default-root-certificate
+        key: ca.crt
+  partitions: 12
+  replicationFactor: 3
+  additionalConfig:
+    retention.ms: "86400000"     # 1 day (high volume)

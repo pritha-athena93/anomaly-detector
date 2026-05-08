@@ -1,0 +1,68 @@
+namespaces:
+  - name: argocd
+  - name: cert-manager
+  - name: reflector
+  - name: vault
+  - name: kafka
+  - name: kubeflow
+  - name: kserve
+  - name: anomaly-poller
+  - name: ml-agent
+  - name: training-pipeline
+  - name: monitoring
+
+# Explicit egress allow rules (on top of default-deny-all + allow-dns)
+# Format: { namespace, egressTo, ports } or { namespace, egressToExternal, ports }
+allowRules:
+  # poller → kserve (inference HTTP)
+  - namespace: anomaly-poller
+    egressTo: kserve
+    ports: [80, 8080]
+  # poller → kafka (Redpanda TLS)
+  - namespace: anomaly-poller
+    egressTo: kafka
+    ports: [9093]
+  # poller → vault (sidecar injector)
+  - namespace: anomaly-poller
+    egressTo: vault
+    ports: [8200]
+  # poller → AWS (SQS, S3, SSM via NAT)
+  - namespace: anomaly-poller
+    egressToExternal: true
+    ports: [443]
+  # agent → kafka
+  - namespace: ml-agent
+    egressTo: kafka
+    ports: [9093]
+  # agent → vault
+  - namespace: ml-agent
+    egressTo: vault
+    ports: [8200]
+  # agent → AWS (Bedrock, SSM, RDS via NAT)
+  - namespace: ml-agent
+    egressToExternal: true
+    ports: [443, 5432]
+  # training → vault
+  - namespace: training-pipeline
+    egressTo: vault
+    ports: [8200]
+  # training → kubeflow (KFP API)
+  - namespace: training-pipeline
+    egressTo: kubeflow
+    ports: [8888, 8080]
+  # training → AWS (S3, SSM, Bedrock, RDS via NAT)
+  - namespace: training-pipeline
+    egressToExternal: true
+    ports: [443, 5432]
+  # monitoring → scrape everything
+  - namespace: monitoring
+    egressToAll: true
+    ports: [8080, 8081, 9090, 9091, 9644]
+  # vault → AWS STS (IRSA token exchange)
+  - namespace: vault
+    egressToExternal: true
+    ports: [443]
+  # cert-manager → ACME / external (for self-signed, not strictly needed but safe)
+  - namespace: cert-manager
+    egressToExternal: true
+    ports: [443]

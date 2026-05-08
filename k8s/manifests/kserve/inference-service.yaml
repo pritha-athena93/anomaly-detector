@@ -1,0 +1,53 @@
+# KServe InferenceService — IsolationForest anomaly detector.
+#
+# storageUri: substitute from `terraform output kserve_storage_uri`
+#   → s3://<model-registry-bucket>/anomaly-detector/latest
+#   KFP training pipeline writes model here after each successful run.
+#
+# IRSA: kserve-sa annotated with irsa_kserve_sa ARN (S3 read access to model-registry bucket).
+#
+# protocolVersion: v2 (KServe v0.11+ default, Open Inference Protocol).
+# Poller sends v2 payload: {"inputs": [{"name": "input-0", "shape": [...], "datatype": "FP32", ...}]}
+#
+# HPA: minReplicas=1, maxReplicas=3, scale on CPU 60%.
+# During normal load (5-min batch poll) 1 replica handles easily.
+# Burst scaling kicks in during training or replay events.
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: anomaly-detector
+  namespace: kserve
+  annotations:
+    serving.kserve.io/autoscalerClass: hpa
+    serving.kserve.io/metric: cpu
+    serving.kserve.io/targetUtilizationPercentage: "60"
+    serving.kserve.io/minReplicas: "1"
+    serving.kserve.io/maxReplicas: "3"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  predictor:
+    serviceAccountName: kserve-sa
+    sklearn:
+      # Substitute 984445750473 and BUCKET_NAME after `terraform apply`:
+      #   storageUri: $(terraform output -raw kserve_storage_uri)
+      storageUri: s3://anomaly-detector-model-registry-984445750473/anomaly-detector/latest
+      protocolVersion: v2
+      resources:
+        requests:
+          cpu: 200m
+          memory: 512Mi
+        limits:
+          cpu: 1000m
+          memory: 1Gi
+---
+# ServiceAccount with IRSA annotation — allows KServe to pull model from S3.
+# ARN comes from: terraform output irsa_kserve_sa
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kserve-sa
+  namespace: kserve
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::984445750473:role/anomaly-detector-kserve-sa"

@@ -1,0 +1,10 @@
+{{- range .Values.namespaces }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .name }}
+  labels:
+    kubernetes.io/metadata.name: {{ .name }}
+    app.kubernetes.io/managed-by: argocd
+---
+{{- end }}

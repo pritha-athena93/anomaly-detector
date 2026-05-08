@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ml-agent
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"   # after kafka, vault injector must be running
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/pritha-athena93/anomaly-detector.git
+    targetRevision: main
+    path: k8s/manifests/ml-agent
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ml-agent
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false

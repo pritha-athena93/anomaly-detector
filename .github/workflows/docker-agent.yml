@@ -1,0 +1,71 @@
+name: Build + Push Agent Image
+on:
+  push:
+    branches: [main]
+    paths: [agent/**, poller/**]
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_984445750473 }}:role/anomaly-detector-github-ecr
+          aws-region: us-east-1
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tag
+        id: meta
+        run: echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      - name: Build and push agent image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          docker build \
+            -t $ECR_REGISTRY/anomaly-detector/agent:$IMAGE_TAG \
+            -t $ECR_REGISTRY/anomaly-detector/agent:latest \
+            -f agent/Dockerfile .
+          docker push $ECR_REGISTRY/anomaly-detector/agent:$IMAGE_TAG
+          docker push $ECR_REGISTRY/anomaly-detector/agent:latest
+
+      - name: Build and push poller image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          docker build \
+            -t $ECR_REGISTRY/anomaly-detector/poller:$IMAGE_TAG \
+            -t $ECR_REGISTRY/anomaly-detector/poller:latest \
+            -f poller/Dockerfile .
+          docker push $ECR_REGISTRY/anomaly-detector/poller:$IMAGE_TAG
+          docker push $ECR_REGISTRY/anomaly-detector/poller:latest
+
+      # GitOps: commit updated image tags → ArgoCD detects diff → rolling update
+      - name: Update image tags in manifests
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          sed -i "s|image:.*anomaly-detector/agent:.*|image: ${ECR_REGISTRY}/anomaly-detector/agent:${IMAGE_TAG}|" \
+            k8s/manifests/ml-agent/deployment.yaml
+          sed -i "s|image:.*anomaly-detector/poller:.*|image: ${ECR_REGISTRY}/anomaly-detector/poller:${IMAGE_TAG}|" \
+            k8s/manifests/anomaly-poller/cronjob.yaml
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add k8s/manifests/ml-agent/deployment.yaml k8s/manifests/anomaly-poller/cronjob.yaml
+          git diff --staged --quiet || git commit -m "chore: update agent+poller images to ${IMAGE_TAG} [skip ci]"
+          git push

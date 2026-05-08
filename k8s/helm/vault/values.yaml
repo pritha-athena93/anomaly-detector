@@ -1,0 +1,106 @@
+# Vault Helm values — HA mode with integrated Raft storage + TLS.
+#
+# Gap-4 fix (single-node Vault):
+#   Switched from standalone to HA with 3 replicas + Raft consensus.
+#   Vault pod restart no longer blocks all secret consumers — remaining
+#   replicas continue serving. Re-unseal is still required on the restarted
+#   pod (auto-unseal via AWS KMS recommended for production).
+#
+# TLS: cert-manager issues vault-tls secret (k8s/manifests/vault/certificate.yaml).
+# Reflector copies it to consumer namespaces (k8s/argocd/apps/reflector.yaml).
+
+ui:
+  enabled: true
+
+injector:
+  enabled: true   # Vault Agent sidecar: inject secrets as files, not env vars
+
+server:
+  # ── HA with Raft (gap-4 fix) ──────────────────────────
+  standalone:
+    enabled: false
+
+  ha:
+    enabled: true
+    replicas: 3
+    raft:
+      enabled: true
+      setNodeId: true
+      config: |
+        ui = true
+
+        listener "tcp" {
+          address     = "[::]:8200"
+          tls_cert_file = "/vault/userconfig/vault-tls/tls.crt"
+          tls_key_file  = "/vault/userconfig/vault-tls/tls.key"
+          tls_client_ca_file = "/vault/userconfig/vault-tls/ca.crt"
+          tls_min_version = "tls12"
+        }
+
+        storage "raft" {
+          path    = "/vault/data"
+          node_id = "${HOSTNAME}"
+
+          retry_join {
+            leader_api_addr     = "https://vault-0.vault-internal:8200"
+            leader_ca_cert_file = "/vault/userconfig/vault-tls/ca.crt"
+          }
+          retry_join {
+            leader_api_addr     = "https://vault-1.vault-internal:8200"
+            leader_ca_cert_file = "/vault/userconfig/vault-tls/ca.crt"
+          }
+          retry_join {
+            leader_api_addr     = "https://vault-2.vault-internal:8200"
+            leader_ca_cert_file = "/vault/userconfig/vault-tls/ca.crt"
+          }
+        }
+
+        service_registration "kubernetes" {}
+
+  # ── TLS cert from cert-manager ────────────────────────
+  extraInitContainers:
+    - name: wait-for-tls
+      image: bitnami/kubectl:latest
+      command:
+        - /bin/sh
+        - -c
+        - |
+          until kubectl get secret vault-tls -n vault 2>/dev/null; do
+            echo "Waiting for vault-tls secret..."; sleep 5
+          done
+
+  volumes:
+    - name: vault-tls
+      secret:
+        secretName: vault-tls
+
+  volumeMounts:
+    - name: vault-tls
+      mountPath: /vault/userconfig/vault-tls
+      readOnly: true
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1
+      memory: 512Mi
+
+  readinessProbe:
+    enabled: true
+    path: /v1/sys/health?standbyok=true
+    port: 8200
+    scheme: HTTPS
+
+  livenessProbe:
+    enabled: true
+    path: /v1/sys/health?standbyok=true
+    port: 8200
+    scheme: HTTPS
+
+  # Persistent storage for Raft log
+  dataStorage:
+    enabled: true
+    size: 10Gi
+    storageClass: gp3

@@ -1,0 +1,32 @@
+# Vault Kubernetes auth role configuration.
+# Run these commands manually after Vault init + unseal (see README Step 8).
+#
+# Prerequisites:
+#   vault auth enable kubernetes
+#   vault write auth/kubernetes/config kubernetes_host="https://kubernetes.default.svc:443"
+#
+# Then apply each role:
+
+# ── ml-agent ──────────────────────────────────────────────
+# vault write auth/kubernetes/role/ml-agent \
+#   bound_service_account_names=agent-sa \
+#   bound_service_account_namespaces=ml-agent \
+#   policies=agent-policy \
+#   ttl=1h
+
+# ── anomaly-poller ────────────────────────────────────────
+# vault write auth/kubernetes/role/anomaly-poller \
+#   bound_service_account_names=poller-sa \
+#   bound_service_account_namespaces=anomaly-poller \
+#   policies=poller-policy \
+#   ttl=1h
+
+# ── training-pipeline ────────────────────────────────────
+# vault write auth/kubernetes/role/training-pipeline \
+#   bound_service_account_names=training-sa \
+#   bound_service_account_namespaces=training-pipeline \
+#   policies=training-policy \
+#   ttl=1h
+
+# Full setup script (run from inside cluster or with kubectl port-forward):
+# See README Step 8 for the full Vault setup sequence.

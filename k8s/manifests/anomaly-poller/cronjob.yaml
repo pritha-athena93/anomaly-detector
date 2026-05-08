@@ -1,0 +1,85 @@
+# SQS Poller CronJob — runs every 5 minutes.
+#
+# Flow per run:
+#   1. _validate_feature_schema() — exit 1 if feature hash mismatch (gap-6)
+#   2. poll() — receive up to 10 SQS messages (CloudTrail S3 notifications)
+#   3. For each S3 object: decode events → KServe inference → Kafka publish
+#
+# restartPolicy: OnFailure — if poller exits non-zero (schema drift, auth error),
+# CronJob creates a new pod. After backoffLimit failures the job fails and
+# alerts ops via pod crash-loop events picked up by kube-prometheus-stack.
+#
+# IRSA: poller-sa annotated with irsa_poller_sa ARN.
+# Permissions: sqs:ReceiveMessage, sqs:DeleteMessage, s3:GetObject (cloudtrail bucket),
+#              s3:GetObject (model-registry for feature_schema.json).
+#
+# Redpanda TLS CA: mounted from internal-ca secret reflected into anomaly-poller
+# namespace by Reflector (k8s/manifests/cert-manager/cluster-issuer.yaml).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: anomaly-poller
+  namespace: anomaly-poller
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid        # skip if previous run still active
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: anomaly-poller
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: poller-sa
+          volumes:
+            - name: redpanda-ca
+              secret:
+                secretName: internal-ca
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+          containers:
+            - name: poller
+              image: 984445750473.dkr.ecr.REGION.amazonaws.com/anomaly-poller:latest
+              command: ["python", "poller/poller.py"]
+              env:
+                - name: AWS_REGION
+                  value: us-east-1
+                - name: SQS_URL
+                  # Substitute from: terraform output sqs_queue_url
+                  value: "https://sqs.us-east-1.amazonaws.com/984445750473/anomaly-detector-cloudtrail-events"
+                - name: KSERVE_URL
+                  value: "http://anomaly-detector.kserve.svc.cluster.local/v2/models/anomaly-detector:infer"
+                - name: KAFKA_BROKERS
+                  value: "anomaly-redpanda-0.anomaly-redpanda.kafka.svc:9093"
+                - name: KAFKA_CA_CERT
+                  value: /etc/redpanda/certs/ca.crt
+                - name: MODEL_REGISTRY_BUCKET
+                  # Substitute from: terraform output model_registry_bucket
+                  value: "anomaly-detector-model-registry-984445750473"
+                - name: THRESHOLD
+                  value: "-0.1"
+              volumeMounts:
+                - name: redpanda-ca
+                  mountPath: /etc/redpanda/certs
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: poller-sa
+  namespace: anomaly-poller
+  annotations:
+    # ARN from: terraform output irsa_poller_sa
+    eks.amazonaws.com/role-arn: "arn:aws:iam::984445750473:role/anomaly-detector-poller-sa"

@@ -1,0 +1,4 @@
+apiVersion: v2
+name: namespaces
+description: Creates all application namespaces with default-deny-all NetworkPolicy and explicit allow rules
+version: 1.0.0

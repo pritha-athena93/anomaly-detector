@@ -1,0 +1,100 @@
+# ml-agent — LangGraph Kafka consumer (primary runtime mode).
+#
+# Runs run_consumer() from agent/graph.py in an infinite loop:
+#   anomalies-flagged → idempotency_check → retrieve (RAG) → classify (Bedrock) → route → checkpoint
+#
+# 2 replicas: Kafka consumer group "langgraph-agent" handles partition assignment.
+# Manual offset commit (enable_auto_commit=False) — offset committed only after
+# graph.invoke() completes, so Kafka replays on pod restart (idempotency_check dedupes).
+#
+# Secrets injected by Vault Agent Sidecar Injector:
+#   /vault/secrets/rds-dsn         → RDS connection string
+#   /vault/secrets/pagerduty-key   → PD Events API v2 integration key
+#   /vault/secrets/slack-webhook   → Slack incoming webhook URL
+#
+# IRSA: agent-sa is annotated with eks.amazonaws.com/role-arn → irsa_agent_sa Terraform output.
+# Permissions: Bedrock (InvokeModel), SSM (GetParameter), CloudWatch, Secrets Manager (read).
+#
+# Redpanda CA cert mounted from the vault-tls secret reflected into ml-agent namespace
+# by Reflector (see k8s/manifests/cert-manager/cluster-issuer.yaml).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-agent
+  namespace: ml-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ml-agent
+  template:
+    metadata:
+      labels:
+        app: ml-agent
+      annotations:
+        # Vault agent sidecar injector
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "ml-agent"
+        vault.hashicorp.com/agent-inject-secret-rds-dsn: "secret/data/anomaly/rds"
+        vault.hashicorp.com/agent-inject-template-rds-dsn: |
+          {{- with secret "secret/data/anomaly/rds" -}}
+          {{ .Data.data.dsn }}
+          {{- end }}
+        vault.hashicorp.com/agent-inject-secret-pagerduty-key: "secret/data/anomaly/pagerduty"
+        vault.hashicorp.com/agent-inject-template-pagerduty-key: |
+          {{- with secret "secret/data/anomaly/pagerduty" -}}
+          {{ .Data.data.key }}
+          {{- end }}
+        vault.hashicorp.com/agent-inject-secret-slack-webhook: "secret/data/anomaly/slack"
+        vault.hashicorp.com/agent-inject-template-slack-webhook: |
+          {{- with secret "secret/data/anomaly/slack" -}}
+          {{ .Data.data.webhook_url }}
+          {{- end }}
+    spec:
+      serviceAccountName: agent-sa
+      volumes:
+        - name: redpanda-ca
+          secret:
+            # internal-ca secret reflected into ml-agent namespace by Reflector
+            secretName: internal-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+      containers:
+        - name: ml-agent
+          image: 984445750473.dkr.ecr.REGION.amazonaws.com/anomaly-agent:latest
+          command:
+            - python
+            - -c
+            - "from agent.graph import run_consumer; run_consumer()"
+          env:
+            - name: AWS_REGION
+              value: us-east-1
+            - name: KAFKA_BROKERS
+              value: "anomaly-redpanda-0.anomaly-redpanda.kafka.svc:9093"
+            - name: KAFKA_CA_CERT
+              value: /etc/redpanda/certs/ca.crt
+            - name: MODEL_ID
+              value: us.anthropic.claude-3-5-sonnet-20241022-v2:0
+            - name: EMBED_MODEL_ID
+              value: amazon.titan-embed-text-v2:0
+            - name: VAULT_SECRETS_PATH
+              value: /vault/secrets
+          volumeMounts:
+            - name: redpanda-ca
+              mountPath: /etc/redpanda/certs
+              readOnly: true
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          livenessProbe:
+            exec:
+              # Consumer is healthy if it has committed an offset in the last 5 min.
+              # Simple stub — replace with a real health file written by run_consumer().
+              command: ["true"]
+            initialDelaySeconds: 30
+            periodSeconds: 60

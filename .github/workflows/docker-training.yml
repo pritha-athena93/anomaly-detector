@@ -1,0 +1,50 @@
+name: Build + Push Training Pipeline Image
+on:
+  push:
+    branches: [main]
+    paths: [ml/**, data/**]
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_984445750473 }}:role/anomaly-detector-github-ecr
+          aws-region: us-east-1
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push training pipeline image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            -t $ECR_REGISTRY/anomaly-detector/training-pipeline:$IMAGE_TAG \
+            -t $ECR_REGISTRY/anomaly-detector/training-pipeline:latest \
+            -f ml/Dockerfile .
+          docker push $ECR_REGISTRY/anomaly-detector/training-pipeline:$IMAGE_TAG
+          docker push $ECR_REGISTRY/anomaly-detector/training-pipeline:latest
+
+      - name: Update image tag in training CronJob manifest
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          sed -i "s|image:.*anomaly-detector/training-pipeline:.*|image: ${ECR_REGISTRY}/anomaly-detector/training-pipeline:${IMAGE_TAG}|" \
+            k8s/manifests/training-pipeline/cronjob.yaml
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add k8s/manifests/training-pipeline/cronjob.yaml
+          git diff --staged --quiet || git commit -m "chore: update training-pipeline image to ${IMAGE_TAG} [skip ci]"
+          git push

@@ -1,0 +1,44 @@
+name: Terraform Security Scan + PR
+on:
+  push:
+    branches-ignore: [main]
+    paths: [infra/**]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  tfsec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: infra
+          format: markdown
+          additional_args: --minimum-severity HIGH
+        continue-on-error: true
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref_name }}
+          base: main
+          title: "[infra] ${{ github.ref_name }}"
+          body: |
+            ## Terraform Changes
+
+            Branch: `${{ github.ref_name }}`
+            Commit: `${{ github.sha }}`
+
+            ## tfsec Security Scan (HIGH+)
+
+            ${{ steps.tfsec.outputs.results || 'No HIGH/CRITICAL findings.' }}
+
+            ---
+            *Review tfsec findings before merging. Merge triggers `terraform apply`.*
+          draft: false

@@ -1,0 +1,28 @@
+# helm repo add bitnami https://charts.bitnami.com/bitnami
+# helm repo update
+# helm install mlflow-postgres bitnami/postgresql \
+#   -n mlflow -f values.yaml
+#
+# Requires secret: mlflow-postgres-secret (created by scripts/create-secrets.sh)
+#   keys: postgres-password (superuser), password (mlflow user)
+
+auth:
+  username: mlflow
+  database: mlflow
+  existingSecret: mlflow-postgres-secret
+  secretKeys:
+    adminPasswordKey: postgres-password
+    userPasswordKey: password
+
+primary:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: local-path

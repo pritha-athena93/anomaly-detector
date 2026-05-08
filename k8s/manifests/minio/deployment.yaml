@@ -1,0 +1,83 @@
+# Standalone MinIO using official image (replaces bitnami chart)
+# Uses PVC created by bitnami chart (already bound: mlflow-minio)
+# Requires secret: mlflow-minio-secret (keys: root-user, root-password)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow-minio
+  namespace: mlflow
+  labels:
+    app: mlflow-minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mlflow-minio
+  template:
+    metadata:
+      labels:
+        app: mlflow-minio
+    spec:
+      containers:
+        - name: minio
+          image: quay.io/minio/minio:RELEASE.2024-06-13T22-53-53Z
+          args:
+            - server
+            - /data
+            - --console-address
+            - ":9001"
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mlflow-minio-secret
+                  key: root-user
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mlflow-minio-secret
+                  key: root-password
+          ports:
+            - containerPort: 9000
+              name: api
+            - containerPort: 9001
+              name: console
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mlflow-minio
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlflow-minio
+  namespace: mlflow
+spec:
+  selector:
+    app: mlflow-minio
+  type: NodePort
+  ports:
+    - name: api
+      port: 9000
+      targetPort: 9000
+      nodePort: 30900
+    - name: console
+      port: 9001
+      targetPort: 9001
+      nodePort: 30901

@@ -1,0 +1,64 @@
+# Redpanda operator + cluster + topics.
+# Operator must be Ready before cluster.yaml is applied (sync-wave ordering).
+# cert-manager must be Ready before operator (Redpanda uses it for broker TLS certs).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: redpanda-operator
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://charts.redpanda.com
+    chart: redpanda-operator
+    targetRevision: 2.1.20
+    helm:
+      values: |
+        additionalCmdFlags:
+          - "--additional-controllers=topic"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kafka
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: redpanda-cluster
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"   # after operator
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/pritha-athena93/anomaly-detector.git
+    targetRevision: main
+    path: k8s/manifests/kafka
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kafka
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true

@@ -1,0 +1,82 @@
+# Monthly training pipeline trigger CronJob.
+#
+# Fires 02:00 UTC on the 1st of each month.
+# Submits the KFP v2 pipeline (ml/training_pipeline.py) to Kubeflow Pipelines.
+#
+# Pipeline steps (each blocks the next — gap-2 fix):
+#   fetch_logs → engineer_features → run_katib_hpo → train_and_evaluate →
+#   register_model → update_kserve → index_rag_chunks → write_train_ts
+#
+# Vault injects DB_DSN via sidecar — read from /vault/secrets/postgres.
+# IRSA training-sa: S3 (cloudtrail + model-registry + kfp-artifacts), SSM PutParameter,
+#                    ECR pull, Bedrock InvokeModel (for rag_indexer embed calls).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: monthly-training-trigger
+  namespace: training-pipeline
+spec:
+  schedule: "0 2 1 * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: training-trigger
+          annotations:
+            vault.hashicorp.com/agent-inject: "true"
+            vault.hashicorp.com/role: "training-pipeline"
+            vault.hashicorp.com/agent-inject-secret-postgres: "secret/data/anomaly/postgres"
+            vault.hashicorp.com/agent-inject-template-postgres: |
+              {{- with secret "secret/data/anomaly/postgres" -}}
+              {{ .Data.data.dsn }}
+              {{- end }}
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: training-sa
+          containers:
+            - name: trigger
+              image: 984445750473.dkr.ecr.REGION.amazonaws.com/anomaly-detector/training-pipeline:latest
+              command:
+                - python
+                - -c
+                - |
+                  import subprocess, sys
+                  # Compile + submit the KFP pipeline
+                  subprocess.run(
+                      ["python", "ml/training_pipeline.py"],
+                      check=True
+                  )
+              env:
+                - name: AWS_REGION
+                  value: us-east-1
+                - name: KUBEFLOW_ENDPOINT
+                  value: http://ml-pipeline.kubeflow.svc:8888
+                - name: MODEL_REGISTRY_BUCKET
+                  value: "anomaly-detector-model-registry-984445750473"
+                - name: CLOUDTRAIL_BUCKET
+                  value: "anomaly-detector-cloudtrail-logs-984445750473"
+                - name: KFP_ARTIFACTS_BUCKET
+                  value: "anomaly-detector-kfp-artifacts-984445750473"
+                - name: DB_DSN_FILE
+                  value: /vault/secrets/postgres
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: training-sa
+  namespace: training-pipeline
+  annotations:
+    # ARN from: terraform output irsa_kfp_pipeline_sa
+    eks.amazonaws.com/role-arn: "arn:aws:iam::984445750473:role/anomaly-detector-kfp-pipeline-sa"

@@ -1,0 +1,48 @@
+# Self-signed ClusterIssuer — acts as the root CA for all internal TLS.
+# Issues certificates for: Vault, Redpanda (via its own cert chain).
+#
+# For production, replace with an ACME issuer (Let's Encrypt) or
+# integrate with AWS Private CA via cert-manager-aws-pca-issuer.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-cluster-issuer
+spec:
+  selfSigned: {}
+---
+# Internal CA Certificate — issued by the selfsigned issuer above.
+# All service certificates (Vault, etc.) reference this CA as their issuer,
+# creating a two-level chain: root selfsigned → internal CA → service cert.
+# This lets Reflector copy just the CA cert to consumer namespaces.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: internal-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: anomaly-detector-internal-ca
+  secretName: internal-ca-secret
+  secretTemplate:
+    annotations:
+      # Reflector: copy CA cert to all service namespaces that verify TLS
+      reflector.v1.k8s.emberstack.com/reflection-allowed: "true"
+      reflector.v1.k8s.emberstack.com/reflection-allowed-namespaces: >-
+        vault,kafka,ml-agent,anomaly-poller,kserve,kubeflow,monitoring
+      reflector.v1.k8s.emberstack.com/reflection-auto-enabled: "true"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: selfsigned-cluster-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+# ClusterIssuer backed by the internal CA — used to sign Vault leaf certs.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: internal-ca-issuer
+spec:
+  ca:
+    secretName: internal-ca-secret

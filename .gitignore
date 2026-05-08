@@ -1,0 +1,31 @@
+# secrets — never commit actual secret files
+k8s/secrets/*.yaml
+!k8s/secrets/*.yaml.example
+
+# terraform
+infra/.terraform/
+infra/state/
+infra/*.tfstate
+infra/*.tfstate.backup
+infra/config/terraform.tfvars
+!infra/config/terraform.tfvars.example
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# data (large files, not in git)
+data/raw/
+data/processed/
+data/federated/
+
+# misc
+.DS_Store
+*.log

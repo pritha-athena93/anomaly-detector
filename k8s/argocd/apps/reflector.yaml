@@ -1,0 +1,46 @@
+# Reflector (emberstack) — copies cert-manager Secrets across namespaces.
+# Consumers (ml-agent, anomaly-poller, kserve) mount reflected CA certs
+# to verify TLS connections to Vault and Redpanda.
+#
+# How it works:
+#   1. Source secret has annotation: reflector.v1.k8s.emberstack.com/reflection-allowed: "true"
+#      and: reflector.v1.k8s.emberstack.com/reflection-allowed-namespaces: "ml-agent,..."
+#   2. Reflector watches for annotated secrets and copies them into allowed namespaces.
+#   3. Reflected copies are kept in sync — updates to source propagate automatically.
+#
+# Annotations are set in:
+#   k8s/manifests/cert-manager/cluster-issuer.yaml   (on the CA Certificate secretTemplate)
+#   k8s/manifests/vault/certificate.yaml             (on the Vault Certificate secretTemplate)
+#   k8s/manifests/kafka/cluster.yaml                 (Redpanda CA — via clusterSpec.tls.certs)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: reflector
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://emberstack.github.io/helm-charts
+    chart: reflector
+    targetRevision: 7.1.288
+    helm:
+      values: |
+        replicaCount: 1
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: reflector
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false

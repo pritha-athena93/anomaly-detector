@@ -1,0 +1,142 @@
+# kube-prometheus-stack Helm values.
+# Deployed via ArgoCD: k8s/argocd/apps/kube-prometheus-stack.yaml
+#
+# Grafana admin credentials: from Vault secret/anomaly/grafana
+# (configure vault kv put secret/anomaly/grafana admin_password=... after Vault init)
+
+grafana:
+  enabled: true
+  adminUser: admin
+  adminPassword: ""   # set via Vault injection or helm --set-string
+  service:
+    type: ClusterIP   # access via kubectl port-forward; no public ingress on private cluster
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: ALL
+  additionalDataSources:
+    - name: Prometheus
+      type: prometheus
+      url: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+      access: proxy
+      isDefault: true
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: anomaly-detector
+          orgId: 1
+          folder: Anomaly Detector
+          type: file
+          options:
+            path: /var/lib/grafana/dashboards/anomaly-detector
+  dashboards:
+    anomaly-detector:
+      anomaly-overview:
+        json: |
+          {
+            "title": "Anomaly Detector Overview",
+            "panels": [
+              {
+                "title": "Anomalies Flagged / 5min",
+                "type": "stat",
+                "targets": [{"expr": "increase(kafka_consumer_fetch_manager_records_consumed_total{topic='anomalies-flagged'}[5m])"}]
+              },
+              {
+                "title": "Agent Decisions — genuine_bug rate",
+                "type": "gauge",
+                "targets": [{"expr": "rate(anomaly_agent_decisions_total{decision='genuine_bug'}[1h]) / rate(anomaly_agent_decisions_total[1h])"}]
+              },
+              {
+                "title": "Bedrock Latency p99 (ms)",
+                "type": "timeseries",
+                "targets": [{"expr": "histogram_quantile(0.99, rate(anomaly_bedrock_duration_seconds_bucket[5m])) * 1000"}]
+              },
+              {
+                "title": "KServe Inference Latency p95 (ms)",
+                "type": "timeseries",
+                "targets": [{"expr": "histogram_quantile(0.95, rate(revision_request_latencies_bucket{namespace='kserve'}[5m]))"}]
+              },
+              {
+                "title": "SQS DLQ Depth",
+                "type": "stat",
+                "targets": [{"expr": "aws_sqs_approximate_number_of_messages_visible{queue_name=~'.*dlq.*'}"}]
+              },
+              {
+                "title": "Redpanda Consumer Lag — anomalies-flagged",
+                "type": "timeseries",
+                "targets": [{"expr": "redpanda_kafka_consumer_group_lag{topic='anomalies-flagged', group='langgraph-agent'}"}]
+              },
+              {
+                "title": "Poller CronJob Last Success",
+                "type": "stat",
+                "targets": [{"expr": "time() - kube_job_status_completion_time{job_name=~'anomaly-poller-.*', namespace='anomaly-poller'}"}]
+              }
+            ]
+          }
+
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+    # Scrape Redpanda metrics (JMX exporter on port 9404, or Redpanda native metrics on :9644)
+    additionalScrapeConfigs:
+      - job_name: redpanda
+        static_configs:
+          - targets:
+              - anomaly-redpanda-0.anomaly-redpanda.kafka.svc:9644
+              - anomaly-redpanda-1.anomaly-redpanda.kafka.svc:9644
+              - anomaly-redpanda-2.anomaly-redpanda.kafka.svc:9644
+        scheme: https
+        tls_config:
+          ca_file: /etc/prometheus/certs/ca.crt
+          insecure_skip_verify: false
+        metrics_path: /metrics
+      - job_name: anomaly-poller
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [anomaly-poller]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+      - job_name: ml-agent
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [ml-agent]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+
+alertmanager:
+  enabled: true
+  config:
+    global:
+      resolve_timeout: 5m
+    receivers:
+      - name: slack-anomalies
+        slack_configs:
+          - api_url: "SLACK_WEBHOOK_URL"   # replace with actual URL or use Vault injection
+            channel: "#anomalies-alerts"
+            title: "{{ .GroupLabels.alertname }}"
+            text: "{{ range .Alerts }}{{ .Annotations.description }}{{ end }}"
+    route:
+      receiver: slack-anomalies
+      group_by: [alertname, namespace]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi

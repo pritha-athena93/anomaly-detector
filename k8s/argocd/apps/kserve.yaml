@@ -1,0 +1,54 @@
+# Two apps: kserve operator (Helm) + inference service (Git)
+# Sync wave 3: after cert-manager (wave 0) + namespaces (wave 0)
+# kserve operator must be installed before InferenceService CRD is available.
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kserve
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: default
+  sources:
+    - repoURL: https://kserve.github.io/helm-charts
+      chart: kserve
+      targetRevision: v0.13.0
+      helm:
+        releaseName: kserve
+        parameters:
+          - name: kserve.controller.image.tag
+            value: v0.13.0
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kserve
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kserve-models
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"   # after kserve CRDs are installed
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/pritha-athena93/anomaly-detector.git
+    targetRevision: main
+    path: k8s/manifests/kserve
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kserve
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false

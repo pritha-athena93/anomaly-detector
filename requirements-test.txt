@@ -1,0 +1,52 @@
+# Test dependencies
+# Install: pip install -r requirements-test.txt
+
+# Core test framework
+pytest>=8.0.0
+pytest-timeout>=2.3.1
+pytest-mock>=3.14.0
+
+# AWS / Infra
+boto3>=1.34.0
+botocore>=1.34.0
+
+# Kafka
+kafka-python>=2.0.2
+
+# Postgres + pgvector
+psycopg2-binary>=2.9.9
+
+# Vault
+hvac>=2.3.0
+
+# HTTP
+requests>=2.31.0
+
+# ML / data
+numpy>=1.26.0
+pandas>=2.2.0
+scikit-learn>=1.4.0
+pyarrow>=15.0.0     # parquet support
+
+# LangGraph / LangChain (agent tests)
+langgraph>=0.1.0
+langchain-aws>=0.1.0
+langchain-core>=0.2.0
+
+# FAISS (tools.py)
+faiss-cpu>=1.8.0
+
+# MLflow (tools.py + trainer.py)
+mlflow>=2.13.0
+
+# Kubernetes (tools.py)
+kubernetes>=29.0.0
+
+# GitHub Actions workflow parsing (security tests)
+pyyaml>=6.0.1
+
+# KFP (training pipeline)
+kfp>=2.7.0
+
+# Coverage (optional)
+pytest-cov>=5.0.0

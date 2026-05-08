@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: training-pipeline
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"   # after kubeflow + vault
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/pritha-athena93/anomaly-detector.git
+    targetRevision: main
+    path: k8s/manifests/training-pipeline
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: training-pipeline
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false

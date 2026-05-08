@@ -1,0 +1,44 @@
+# Vault — standalone mode with TLS listener.
+# TLS cert issued by cert-manager (k8s/manifests/vault/certificate.yaml).
+# Reflector copies the vault-tls secret to consumer namespaces that need
+# to verify the Vault API TLS certificate.
+#
+# NOTE: Vault starts sealed. After first deploy:
+#   kubectl exec -n vault vault-0 -- vault operator init
+#   kubectl exec -n vault vault-0 -- vault operator unseal <key>  (×3)
+# Store unseal keys + root token in a secure offline location.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vault
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    # Helm chart from HashiCorp
+    - repoURL: https://helm.releases.hashicorp.com
+      chart: vault
+      targetRevision: 0.28.0
+      helm:
+        valueFiles:
+          - $values/k8s/helm/vault/values.yaml
+    # Values file from this repo
+    - repoURL: https://github.com/pritha-athena93/anomaly-detector.git
+      targetRevision: main
+      ref: values
+    # cert-manager Certificate manifest
+    - repoURL: https://github.com/pritha-athena93/anomaly-detector.git
+      targetRevision: main
+      path: k8s/manifests/vault
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vault
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true

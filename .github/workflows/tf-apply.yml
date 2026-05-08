@@ -1,0 +1,40 @@
+name: Terraform Apply
+on:
+  push:
+    branches: [main]
+    paths: [infra/**]
+
+permissions:
+  id-token: write   # OIDC — no static AWS keys in GitHub Secrets
+  contents: read
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    environment: production   # requires manual approval gate in GitHub Environments
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          # Create this role in Terraform (infra/main.tf) with GitHub OIDC trust policy.
+          # Trust: token.actions.githubusercontent.com, sub: repo:<org>/anomaly-detector:ref:refs/heads/main
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_984445750473 }}:role/anomaly-detector-github-terraform
+          aws-region: us-east-1
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.0
+
+      - name: Terraform Init
+        working-directory: infra
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: infra
+        run: terraform plan -out=tfplan -var-file=config/terraform.tfvars
+
+      - name: Terraform Apply
+        working-directory: infra
+        run: terraform apply tfplan

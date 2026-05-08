@@ -1,0 +1,103 @@
+apiVersion: kubeflow.org/v1beta1
+kind: Experiment
+metadata:
+  name: anomaly-hpo
+  namespace: kubeflow
+spec:
+  objective:
+    type: maximize
+    goal: 0.85
+    objectiveMetricName: f1
+
+  algorithm:
+    algorithmName: random
+
+  parallelTrialCount: 2
+  maxTrialCount: 10
+  maxFailedTrialCount: 3
+
+  parameters:
+    - name: n_estimators
+      parameterType: int
+      feasibleSpace:
+        min: "50"
+        max: "300"
+    - name: contamination
+      parameterType: double
+      feasibleSpace:
+        min: "0.01"
+        max: "0.15"
+    - name: max_samples
+      parameterType: categorical
+      feasibleSpace:
+        list:
+          - "auto"
+          - "0.5"
+          - "0.8"
+
+  trialTemplate:
+    primaryContainerName: trainer
+    trialParameters:
+      - name: n_estimators
+        description: Number of trees in IsolationForest
+        reference: n_estimators
+      - name: contamination
+        description: Expected fraction of anomalies
+        reference: contamination
+      - name: max_samples
+        description: Fraction of samples per tree
+        reference: max_samples
+    trialSpec:
+      apiVersion: batch/v1
+      kind: Job
+      spec:
+        template:
+          metadata:
+            annotations:
+              sidecar.istio.io/inject: "false"
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: trainer
+                image: ml-trainer:latest   # built from ml/Dockerfile
+                imagePullPolicy: Never
+                command:
+                  - python
+                  - ml/trainer.py
+                env:
+                  - name: N_ESTIMATORS
+                    value: "${trialParameters.n_estimators}"
+                  - name: CONTAMINATION
+                    value: "${trialParameters.contamination}"
+                  - name: MAX_SAMPLES
+                    value: "${trialParameters.max_samples}"
+                  - name: DATA_PATH
+                    value: /data/processed/features.parquet
+                  - name: MLFLOW_TRACKING_URI
+                    value: http://mlflow.mlflow.svc:5000
+                  - name: MLFLOW_S3_ENDPOINT_URL
+                    value: http://mlflow-minio.mlflow.svc:9000
+                  - name: AWS_ACCESS_KEY_ID
+                    valueFrom:
+                      secretKeyRef:
+                        name: mlflow-env-secret
+                        key: AWS_ACCESS_KEY_ID
+                  - name: AWS_SECRET_ACCESS_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: mlflow-env-secret
+                        key: AWS_SECRET_ACCESS_KEY
+                volumeMounts:
+                  - name: data
+                    mountPath: /data
+                resources:
+                  requests:
+                    cpu: 500m
+                    memory: 1Gi
+                  limits:
+                    cpu: 2000m
+                    memory: 4Gi
+            volumes:
+              - name: data
+                hostPath:
+                  path: /tmp/anomaly-data

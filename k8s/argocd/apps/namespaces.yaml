@@ -1,0 +1,25 @@
+# Syncs k8s/namespaces.yaml — must be the first app ArgoCD reconciles.
+# All other apps set CreateNamespace=false and depend on this being Ready.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: namespaces
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/pritha-athena93/anomaly-detector.git
+    targetRevision: main
+    path: k8s
+    include: namespaces.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: false    # never auto-delete a namespace
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
