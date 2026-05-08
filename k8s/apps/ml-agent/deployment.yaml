@@ -62,7 +62,7 @@ spec:
                 path: ca.crt
       containers:
         - name: ml-agent
-          image: 984445750473.dkr.ecr.REGION.amazonaws.com/anomaly-agent:latest
+          image: 984445750473.dkr.ecr.us-east-1.amazonaws.com/anomaly-detector/agent:latest
           command:
             - python
             - -c

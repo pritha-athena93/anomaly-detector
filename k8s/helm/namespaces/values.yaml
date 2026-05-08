@@ -16,58 +16,114 @@ namespaces:
   - name: training-pipeline
   - name: monitoring
 
-# Explicit egress allow rules (on top of default-deny-all + allow-dns)
-# Format: { namespace, egressTo, ports } or { namespace, egressToExternal, ports }
+# Explicit egress/ingress allow rules (layered on top of default-deny-all + allow-dns)
+#
+# Rule types:
+#   egressTo: <ns>           — egress to a namespace + matching ingress on target
+#   egressToExternal: true   — egress to non-RFC1918 IPs (AWS APIs via NAT)
+#   egressToKubernetesAPI: true — egress to 0.0.0.0/0:443 (covers k8s ClusterIP + external)
+#   egressToAll: true        — egress to all namespaces (monitoring scrape)
+#   intraNamespace: true     — allow all pods within the namespace to talk to each other
 allowRules:
-  # poller → kserve (inference HTTP)
+  # ── anomaly-poller ────────────────────────────────────────
   - namespace: anomaly-poller
     egressTo: kserve
     ports: [80, 8080]
-  # poller → kafka (Redpanda TLS)
   - namespace: anomaly-poller
     egressTo: kafka
     ports: [9093]
-  # poller → vault (sidecar injector)
   - namespace: anomaly-poller
     egressTo: vault
     ports: [8200]
-  # poller → AWS (SQS, S3, SSM via NAT)
   - namespace: anomaly-poller
     egressToExternal: true
-    ports: [443]
-  # agent → kafka
+    ports: [443]                # SQS, S3, SSM via NAT
+
+  # ── ml-agent ──────────────────────────────────────────────
   - namespace: ml-agent
     egressTo: kafka
     ports: [9093]
-  # agent → vault
   - namespace: ml-agent
     egressTo: vault
     ports: [8200]
-  # agent → AWS (Bedrock, SSM, RDS via NAT)
   - namespace: ml-agent
     egressToExternal: true
-    ports: [443, 5432]
-  # training → vault
+    ports: [443, 5432]          # Bedrock, SSM, RDS via NAT
+
+  # ── training-pipeline ────────────────────────────────────
   - namespace: training-pipeline
     egressTo: vault
     ports: [8200]
-  # training → kubeflow (KFP API)
   - namespace: training-pipeline
     egressTo: kubeflow
     ports: [8888, 8080]
-  # training → AWS (S3, SSM, Bedrock, RDS via NAT)
   - namespace: training-pipeline
     egressToExternal: true
-    ports: [443, 5432]
-  # monitoring → scrape everything
+    ports: [443, 5432]          # S3, SSM, Bedrock, RDS via NAT
+
+  # ── vault ─────────────────────────────────────────────────
+  - namespace: vault
+    intraNamespace: true
+    ports: [8200, 8201]         # Raft peer-to-peer (8201) + API (8200)
+  - namespace: vault
+    egressToExternal: true
+    ports: [443]                # AWS STS (IRSA token exchange) + KMS (auto-unseal)
+
+  # ── kafka ─────────────────────────────────────────────────
+  - namespace: kafka
+    intraNamespace: true
+    ports: [9093, 33145, 8082, 8083]  # TLS broker + Raft + admin + schema registry
+
+  # ── kserve ────────────────────────────────────────────────
+  - namespace: kserve
+    egressToExternal: true
+    ports: [443]                # S3 model downloads
+
+  # ── argocd ────────────────────────────────────────────────
+  - namespace: argocd
+    egressToKubernetesAPI: true # k8s API (ClusterIP 10.x) + GitHub/Helm repos (external)
+    ports: [443]
+  - namespace: argocd
+    egressToAll: true
+    ports: [443, 80, 8080, 9443] # Apply resources across all namespaces via k8s API
+
+  # ── cert-manager ─────────────────────────────────────────
+  - namespace: cert-manager
+    egressToKubernetesAPI: true # k8s API for cert issuance + external ACME
+    ports: [443]
+
+  # ── reflector ────────────────────────────────────────────
+  - namespace: reflector
+    egressToKubernetesAPI: true # k8s API
+    ports: [443]
+  - namespace: reflector
+    egressToAll: true
+    ports: [443]               # Copy secrets across all namespaces
+
+  # ── monitoring ────────────────────────────────────────────
   - namespace: monitoring
     egressToAll: true
     ports: [8080, 8081, 9090, 9091, 9644]
-  # vault → AWS STS (IRSA token exchange)
+
+# Ingress rules for Prometheus scraping.
+# egressToAll (monitoring) creates egress but NOT matching ingress in each target namespace.
+# These rules open the scrape ports in each namespace to traffic from monitoring.
+scrapeTargets:
   - namespace: vault
-    egressToExternal: true
-    ports: [443]
-  # cert-manager → ACME / external (for self-signed, not strictly needed but safe)
+    ports: [8200]
+  - namespace: kafka
+    ports: [9644, 8082]        # Prometheus exporter + admin
+  - namespace: anomaly-poller
+    ports: [8080]
+  - namespace: ml-agent
+    ports: [8080]
+  - namespace: training-pipeline
+    ports: [8080]
+  - namespace: kserve
+    ports: [8080, 9090]
+  - namespace: kubeflow
+    ports: [8080]
+  - namespace: argocd
+    ports: [8080, 8083]
   - namespace: cert-manager
-    egressToExternal: true
-    ports: [443]
+    ports: [9402]

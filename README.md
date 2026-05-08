@@ -240,57 +240,114 @@ kubectl port-forward svc/argocd-server -n argocd 8080:443
 
 ## Step 8 — Initialize and Unseal Vault
 
-After Vault pods are Running (check `kubectl get pods -n vault`):
+**Auto-unseal:** Vault uses AWS KMS (`alias/anomaly-detector-vault-unseal`) for auto-unseal.
+Pods auto-unseal on restart — no manual intervention needed after first-time init.
+
+### 8a — First-time Init (run once)
 
 ```bash
-# Initialize (do this ONCE — store output securely offline)
-kubectl exec -n vault vault-0 -- vault operator init
-
-# Unseal all 3 nodes (need 3 of 5 keys from init output)
-for pod in vault-0 vault-1 vault-2; do
-  kubectl exec -n vault $pod -- vault operator unseal KEY1
-  kubectl exec -n vault $pod -- vault operator unseal KEY2
-  kubectl exec -n vault $pod -- vault operator unseal KEY3
-done
+# Init on vault-0 (5 keys, threshold 3). Store output OFFLINE — never commit.
+kubectl exec -n vault vault-0 -- sh -c \
+  'VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true vault operator init -key-shares=5 -key-threshold=3 -format=json'
 ```
 
-Configure Vault secrets and Kubernetes auth:
+Save the 5 unseal keys and root token to a secure offline location (password manager, printed paper, HSM).
+
+### 8b — One-time Seal Migration (Shamir → KMS)
+
+Required only once after init. After this, pods auto-unseal forever.
 
 ```bash
-# Port-forward to Vault
-kubectl port-forward -n vault svc/vault 8200:8200 &
-export VAULT_ADDR=https://localhost:8200
-export VAULT_TOKEN=<root-token-from-init>
-export VAULT_CACERT=<path-to-ca.crt>  # from kubectl get secret -n vault vault-tls
+# Unseal all 3 nodes with -migrate flag (uses Shamir keys to re-encrypt under KMS)
+K1=<key1> K2=<key2> K3=<key3>
+for pod in vault-0 vault-1 vault-2; do
+  for k in $K1 $K2 $K3; do
+    kubectl exec -n vault $pod -- sh -c \
+      "VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true vault operator unseal -migrate $k"
+  done
+done
+
+# Verify: Seal Type should be awskms, Sealed=false
+kubectl exec -n vault vault-0 -- sh -c \
+  'VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true vault status' | grep -E 'Seal Type|Sealed'
+```
+
+After migration, Vault logs show `unsealed with stored key` on every restart — fully automatic.
+
+### 8c — Configure Vault (run once after init)
+
+```bash
+# Use active vault node (find with: vault status | grep "HA Mode.*active")
+ACTIVE_POD=vault-2  # or whichever shows active
+ROOT_TOKEN=<root-token-from-init>
+
+kubectl exec -n vault $ACTIVE_POD -- sh -c "
+export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true VAULT_TOKEN=$ROOT_TOKEN
 
 # Enable KV v2
 vault secrets enable -path=secret kv-v2
 
-# Write secrets (Vault agent injector will mount these into pods)
+# Write secrets from AWS Secrets Manager
 vault kv put secret/anomaly/rds \
-  dsn="$(aws secretsmanager get-secret-value --secret-id anomaly/rds-password --query SecretString --output text | jq -r .dsn)"
+  dsn=\"\$(aws secretsmanager get-secret-value --secret-id anomaly/rds-password --query SecretString --output text | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"dsn\"])')\"
 
 vault kv put secret/anomaly/pagerduty \
-  key="$(aws secretsmanager get-secret-value --secret-id anomaly/pagerduty-key --query SecretString --output text | jq -r .key)"
+  key=\"\$(aws secretsmanager get-secret-value --secret-id anomaly/pagerduty-key --query SecretString --output text | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"key\"])')\"
 
 vault kv put secret/anomaly/slack \
-  webhook_url="$(aws secretsmanager get-secret-value --secret-id anomaly/slack-webhook --query SecretString --output text | jq -r .url)"
+  webhook_url=\"\$(aws secretsmanager get-secret-value --secret-id anomaly/slack-webhook --query SecretString --output text | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"url\"])')\"
 
 # Enable Kubernetes auth
 vault auth enable kubernetes
-vault write auth/kubernetes/config \
-  kubernetes_host="https://kubernetes.default.svc:443"
+vault write auth/kubernetes/config kubernetes_host=https://kubernetes.default.svc:443
 
-# Create policy + role for agent
-vault policy write ml-agent - <<EOF
-path "secret/data/anomaly/*" { capabilities = ["read"] }
+# Policies (match k8s/helm/vault/policies/*.hcl)
+vault policy write agent-policy - <<'EOF'
+path \"secret/data/anomaly/rds\"        { capabilities = [\"read\"] }
+path \"secret/data/anomaly/slack\"      { capabilities = [\"read\"] }
+path \"secret/data/anomaly/pagerduty\"  { capabilities = [\"read\"] }
+path \"secret/data/anomaly/kafka\"      { capabilities = [\"read\"] }
+path \"auth/token/renew-self\"          { capabilities = [\"update\"] }
+path \"auth/token/lookup-self\"         { capabilities = [\"read\"] }
 EOF
 
+vault policy write poller-policy - <<'EOF'
+path \"secret/data/anomaly/kafka\"      { capabilities = [\"read\"] }
+path \"auth/token/renew-self\"          { capabilities = [\"update\"] }
+path \"auth/token/lookup-self\"         { capabilities = [\"read\"] }
+EOF
+
+vault policy write training-policy - <<'EOF'
+path \"secret/data/anomaly/rds\"        { capabilities = [\"read\"] }
+path \"auth/token/renew-self\"          { capabilities = [\"update\"] }
+path \"auth/token/lookup-self\"         { capabilities = [\"read\"] }
+EOF
+
+# K8s auth roles
 vault write auth/kubernetes/role/ml-agent \
-  bound_service_account_names=ml-agent-sa \
-  bound_service_account_namespaces=ml-agent \
-  policies=ml-agent \
-  ttl=1h
+  bound_service_account_names=agent-sa bound_service_account_namespaces=ml-agent \
+  policies=agent-policy ttl=1h
+
+vault write auth/kubernetes/role/anomaly-poller \
+  bound_service_account_names=poller-sa bound_service_account_namespaces=anomaly-poller \
+  policies=poller-policy ttl=1h
+
+vault write auth/kubernetes/role/training-pipeline \
+  bound_service_account_names=training-sa bound_service_account_namespaces=training-pipeline \
+  policies=training-policy ttl=1h
+"
+```
+
+### 8d — After Redpanda is Running
+
+Write Kafka broker addresses to Vault (needed by agent + poller):
+
+```bash
+kubectl exec -n vault $ACTIVE_POD -- sh -c "
+export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true VAULT_TOKEN=$ROOT_TOKEN
+vault kv put secret/anomaly/kafka \
+  brokers='anomaly-redpanda-0.anomaly-redpanda.kafka.svc:9093'
+"
 ```
 
 ---

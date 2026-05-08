@@ -44,7 +44,7 @@ spec:
                     path: ca.crt
           containers:
             - name: poller
-              image: 984445750473.dkr.ecr.REGION.amazonaws.com/anomaly-poller:latest
+              image: 984445750473.dkr.ecr.us-east-1.amazonaws.com/anomaly-detector/poller:latest
               command: ["python", "poller/poller.py"]
               env:
                 - name: AWS_REGION

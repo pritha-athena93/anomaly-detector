@@ -32,7 +32,7 @@ spec:
     sklearn:
       # Substitute 984445750473 and BUCKET_NAME after `terraform apply`:
       #   storageUri: $(terraform output -raw kserve_storage_uri)
-      storageUri: s3://anomaly-detector-model-registry-984445750473/anomaly-detector/latest
+      storageUri: s3://anomaly-detector-models-984445750473/anomaly-detector/latest
       protocolVersion: v2
       resources:
         requests:

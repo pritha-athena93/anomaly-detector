@@ -40,7 +40,7 @@ spec:
           serviceAccountName: training-sa
           containers:
             - name: trigger
-              image: 984445750473.dkr.ecr.REGION.amazonaws.com/anomaly-detector/training-pipeline:latest
+              image: 984445750473.dkr.ecr.us-east-1.amazonaws.com/anomaly-detector/training-pipeline:latest
               command:
                 - python
                 - -c

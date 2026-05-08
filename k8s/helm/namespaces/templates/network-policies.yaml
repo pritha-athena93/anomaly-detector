@@ -32,7 +32,7 @@ spec:
 {{- range .Values.allowRules }}
 
 {{- if .egressTo }}
-# {{ .namespace }} → {{ .egressTo }}
+# {{ .namespace }} → {{ .egressTo }} (egress + matching ingress)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -51,7 +51,7 @@ spec:
         - port: {{ . }}
         {{- end }}
 ---
-# Corresponding ingress allow on {{ .egressTo }}
+# Corresponding ingress on {{ .egressTo }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -73,7 +73,7 @@ spec:
 {{- end }}
 
 {{- if .egressToExternal }}
-# {{ .namespace }} → external (AWS APIs via NAT)
+# {{ .namespace }} → external (non-RFC1918, AWS APIs via NAT)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -97,8 +97,57 @@ spec:
 ---
 {{- end }}
 
+{{- if .egressToKubernetesAPI }}
+# {{ .namespace }} → k8s API (ClusterIP 10.x) + external (GitHub/Helm/ACME)
+# No RFC1918 exclusion — k8s API server ClusterIP is in 10.96.0.0/12
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-kubernetes-api
+  namespace: {{ .namespace }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        {{- range .ports }}
+        - port: {{ . }}
+        {{- end }}
+---
+{{- end }}
+
+{{- if .intraNamespace }}
+# {{ .namespace }} → {{ .namespace }} (intra-namespace: pods talk to each other)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: {{ .namespace }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        {{- range .ports }}
+        - port: {{ . }}
+        {{- end }}
+  egress:
+    - to:
+        - podSelector: {}
+      ports:
+        {{- range .ports }}
+        - port: {{ . }}
+        {{- end }}
+---
+{{- end }}
+
 {{- if .egressToAll }}
-# {{ .namespace }} → all namespaces (monitoring scrape)
+# {{ .namespace }} → all namespaces
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -117,4 +166,28 @@ spec:
 ---
 {{- end }}
 
+{{- end }}
+
+# ── Prometheus scrape ingress ─────────────────────────────
+# egressToAll (monitoring) creates egress but not matching ingress in targets.
+# These rules open scrape ports in each namespace to traffic from monitoring.
+{{- range .Values.scrapeTargets }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-monitoring
+  namespace: {{ .namespace }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        {{- range .ports }}
+        - port: {{ . }}
+        {{- end }}
+---
 {{- end }}
