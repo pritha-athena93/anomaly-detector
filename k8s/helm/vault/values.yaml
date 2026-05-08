@@ -21,11 +21,6 @@ server:
     annotations:
       eks.amazonaws.com/role-arn: "arn:aws:iam::984445750473:role/anomaly-detector-vault-sa"
 
-  # KMS key ARN passed as env var — Vault HCL expands ${VAULT_KMS_KEY_ARN} at startup.
-  # Replace with: terraform output -raw vault_kms_key_arn
-  extraEnvironmentVars:
-    VAULT_KMS_KEY_ARN: "arn:aws:kms:us-east-1:984445750473:key/9c8c4a09-b24c-41d5-b8a8-eb541bb39c0e"
-
   # ── HA with Raft ──────────────────────────────────────
   standalone:
     enabled: false
@@ -67,7 +62,7 @@ server:
 
         seal "awskms" {
           region     = "us-east-1"
-          kms_key_id = "${VAULT_KMS_KEY_ARN}"
+          kms_key_id = "arn:aws:kms:us-east-1:984445750473:key/9c8c4a09-b24c-41d5-b8a8-eb541bb39c0e"
         }
 
         service_registration "kubernetes" {}
