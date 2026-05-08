@@ -62,13 +62,13 @@ spec:
 
         resources:
           cpu:
-            cores: 2
+            cores: 1
           memory:
             container:
-              max: 4Gi
+              max: 2Gi
             redpanda:
-              memory: 3Gi
-              reserveMemory: 1Gi
+              memory: 1536Mi
+              reserveMemory: 512Mi
 
         config:
           cluster:
